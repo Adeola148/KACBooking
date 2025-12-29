@@ -38,6 +38,12 @@
             "backgroundColor": "#000000"
           }
         }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "KAC Booking needs access to your calendar so we can add approved meetings."
+        }
       ]
     ],
     "experiments": {
