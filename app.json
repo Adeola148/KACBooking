@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "KACBooking",
-    "slug": "KACBooking",
+    "name": "MeetPastor",
+    "slug": "meetpastor",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "kacbooking",
+    "scheme": "meetpastor",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
@@ -42,7 +42,7 @@
       [
         "expo-calendar",
         {
-          "calendarPermission": "KAC Booking needs access to your calendar so we can add approved meetings."
+          "calendarPermission": "MeetPastor needs access to your calendar so we can add approved meetings."
         }
       ]
     ],
@@ -52,3 +52,4 @@
     }
   }
 }
+
