@@ -1,120 +1,156 @@
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, SafeAreaView } from "react-native";
-import { useState } from "react";
+import { useRouter } from "expo-router";
+import { onAuthStateChanged, signOut, User } from "firebase/auth";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { auth } from "../../firebase/config";
 
-export default function BookingScreen() {
-  const [name, setName] = useState("");
-  const [contact, setContact] = useState("");
-  const [reason, setReason] = useState("");
-  const [date, setDate] = useState("");
+export default function HomeScreen() {
+  const router = useRouter();
+  const [user, setUser] = useState<User | null>(auth.currentUser);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
+    return () => unsub();
+  }, []);
+
+  const displayName = useMemo(() => {
+    const name = user?.displayName?.trim();
+    if (name && name.length > 0) return name;
+
+    const email = user?.email?.trim();
+    if (email) return email.split("@")[0];
+
+    return "there";
+  }, [user]);
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      router.replace("/(auth)");
+    } catch (e: any) {
+      Alert.alert("Logout failed", e?.message ?? "Please try again.");
+    }
+  };
+
+  const handleBookMeeting = () => {
+    router.push("/(tabs)/explore");
+  };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
-        {/* Header */}
-        <Text style={styles.title}>KAC Booking</Text>
-        <Text style={styles.subtitle}>
-          Book a meeting with Apostle Randolph
-        </Text>
+    <SafeAreaView style={styles.safe}>
+      <ScrollView contentContainerStyle={styles.container}>
+        {/* Header Row */}
+        <View style={styles.headerRow}>
+          <Text style={styles.greeting}>Welcome, {displayName} 👋</Text>
 
-        <Text style={styles.description}>
-          Fill in the form below and a member of the team will confirm your request.
-        </Text>
+          <TouchableOpacity onPress={handleLogout} activeOpacity={0.8} style={styles.logoutBtn}>
+            <Text style={styles.logoutText}>Log out</Text>
+          </TouchableOpacity>
+        </View>
 
-        {/* Full Name */}
-        <Text style={styles.label}>Full name</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Enter your full name"
-          value={name}
-          onChangeText={setName}
-        />
+        {/* Card 1 */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Meet Pastor Randolph</Text>
+          <Text style={styles.cardText}>
+            Book a one-to-one meeting for prayer, guidance, or spiritual direction. A member of the
+            team will confirm your request.
+          </Text>
+        </View>
 
-        {/* Contact */}
-        <Text style={styles.label}>Contact (email or phone)</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Email or phone number"
-          value={contact}
-          onChangeText={setContact}
-        />
+        {/* Card 2 */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Your Upcoming Meeting</Text>
+          <Text style={styles.cardText}>You don’t have any meetings scheduled this week.</Text>
+        </View>
 
-        {/* Reason */}
-        <Text style={styles.label}>Reason for meeting</Text>
-        <TextInput
-          style={[styles.input, styles.textArea]}
-          placeholder="Briefly explain the reason"
-          value={reason}
-          onChangeText={setReason}
-          multiline
-        />
-
-        {/* Date */}
-        <Text style={styles.label}>Preferred date</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Select a date"
-          value={date}
-          onChangeText={setDate}
-        />
-
-        {/* Submit */}
-        <TouchableOpacity style={styles.button}>
-          <Text style={styles.buttonText}>Submit Request</Text>
+        {/* CTA */}
+        <TouchableOpacity style={styles.button} onPress={handleBookMeeting} activeOpacity={0.9}>
+          <Text style={styles.buttonText}>Book a Meeting</Text>
         </TouchableOpacity>
-      </View>
+
+        <View style={{ height: 18 }} />
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  safe: {
     flex: 1,
     backgroundColor: "#fff",
+    paddingTop: Platform.OS === "android" ? StatusBar.currentHeight ?? 12 : 0,
   },
   container: {
-    padding: 24,
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 24,
   },
-  title: {
-    fontSize: 26,
-    fontWeight: "700",
+
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 18,
+  },
+
+  greeting: {
+    flex: 1,
+    fontSize: 32,
+    fontWeight: "900",
+    color: "#111",
+  },
+
+  logoutBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: "#F1F1F1",
+  },
+  logoutText: {
+    fontWeight: "800",
+    color: "#111",
+    fontSize: 14,
+  },
+
+  card: {
+    backgroundColor: "#F7F7F8",
+    borderRadius: 20,
+    padding: 18,
+    marginBottom: 14,
+  },
+  cardTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#111",
     marginBottom: 8,
   },
-  subtitle: {
+  cardText: {
     fontSize: 16,
-    fontWeight: "600",
-    marginBottom: 12,
-  },
-  description: {
-    fontSize: 14,
     color: "#555",
-    marginBottom: 24,
+    lineHeight: 22,
   },
-  label: {
-    fontSize: 14,
-    fontWeight: "600",
-    marginBottom: 6,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-  },
-  textArea: {
-    height: 90,
-    textAlignVertical: "top",
-  },
+
   button: {
     backgroundColor: "#000",
-    padding: 16,
-    borderRadius: 10,
+    paddingVertical: 18,
+    borderRadius: 18,
     alignItems: "center",
-    marginTop: 10,
+    marginTop: 6,
   },
   buttonText: {
     color: "#fff",
-    fontWeight: "600",
-    fontSize: 16,
+    fontSize: 18,
+    fontWeight: "800",
   },
 });

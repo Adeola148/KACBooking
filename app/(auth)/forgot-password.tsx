@@ -1,6 +1,5 @@
-import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { signInWithEmailAndPassword } from "firebase/auth";
+import { sendPasswordResetEmail } from "firebase/auth";
 import React, { useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -20,23 +19,16 @@ import BackIconButton from "../../components/BackIconButton";
 import Toast from "../../components/Toast";
 import { auth } from "../../firebase/config";
 
-export default function Login() {
+export default function ForgotPassword() {
   const router = useRouter();
 
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string>("");
 
   const [emailFocused, setEmailFocused] = useState(false);
-  const [passwordFocused, setPasswordFocused] = useState(false);
 
-  const [showPassword, setShowPassword] = useState(false);
-
-  // Refs for keyboard navigation
   const emailRef = useRef<TextInput>(null);
-  const passwordRef = useRef<TextInput>(null);
 
   // Toast
   const [toastVisible, setToastVisible] = useState(false);
@@ -55,8 +47,6 @@ export default function Login() {
   const triggerShake = () => {
     shakeX.setValue(0);
     Animated.sequence([
-      Animated.timing(shakeX, { toValue: 10, duration: 60, useNativeDriver: true }),
-      Animated.timing(shakeX, { toValue: -10, duration: 60, useNativeDriver: true }),
       Animated.timing(shakeX, { toValue: 8, duration: 60, useNativeDriver: true }),
       Animated.timing(shakeX, { toValue: -8, duration: 60, useNativeDriver: true }),
       Animated.timing(shakeX, { toValue: 5, duration: 60, useNativeDriver: true }),
@@ -71,40 +61,40 @@ export default function Login() {
     showToast(msg, "error");
   };
 
-  const handleLogin = async () => {
+  const handleReset = async () => {
     if (loading) return;
 
     Keyboard.dismiss();
     setErrorMsg("");
 
-    if (!email.trim() || !password) {
-      setError("Please enter your email and password.");
+    if (!email.trim()) {
+      setError("Please enter your email address.");
       return;
     }
 
     setLoading(true);
 
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      await sendPasswordResetEmail(auth, email.trim());
 
-      showToast("Logged in successfully ✅", "success");
-      setTimeout(() => router.replace("/(tabs)"), 600);
+      showToast("Reset link sent ✅ (check junk/spam)", "success");
+      setTimeout(() => router.back(), 600);
     } catch (error: any) {
       const message =
-        error?.code === "auth/invalid-credential"
-          ? "Incorrect email or password."
-          : error?.message ?? "Login failed. Please try again.";
+        error?.code === "auth/user-not-found"
+          ? "No user found with that email."
+          : error?.message ?? "Reset failed. Please try again.";
       setError(message);
     } finally {
       setLoading(false);
     }
   };
 
-  const getInputStyle = (isFocused: boolean) => {
+  const getInputStyle = () => {
     const hasError = !!errorMsg;
     return [
       styles.input,
-      isFocused && styles.inputFocused,
+      emailFocused && styles.inputFocused,
       hasError && styles.inputError,
     ];
   };
@@ -125,10 +115,7 @@ export default function Login() {
       <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <View style={styles.container}>
           <View style={styles.topRow}>
-            <BackIconButton
-              onPress={() => router.replace("/(auth)")}
-              disabled={loading}
-            />
+            <BackIconButton onPress={() => router.back()} disabled={loading} />
           </View>
 
           <ScrollView
@@ -136,14 +123,14 @@ export default function Login() {
             keyboardShouldPersistTaps="handled"
           >
             <Animated.View style={animatedStyle}>
-              <Text style={styles.title}>Login</Text>
+              <Text style={styles.title}>Reset Password</Text>
 
               <Text style={styles.label}>Email</Text>
               <TextInput
                 ref={emailRef}
-                placeholder="Email"
+                placeholder="Enter your email"
                 placeholderTextColor="#8A8A8A"
-                style={getInputStyle(emailFocused)}
+                style={getInputStyle()}
                 onChangeText={setEmail}
                 autoCapitalize="none"
                 keyboardType="email-address"
@@ -153,69 +140,27 @@ export default function Login() {
                 editable={!loading}
                 onFocus={() => setEmailFocused(true)}
                 onBlur={() => setEmailFocused(false)}
-                returnKeyType="next"
-                blurOnSubmit={false}
-                onSubmitEditing={() => passwordRef.current?.focus()}
+                returnKeyType="done"
+                onSubmitEditing={handleReset}
               />
-
-              <Text style={styles.label}>Password</Text>
-              <View style={styles.inputWrapper}>
-                <TextInput
-                  ref={passwordRef}
-                  placeholder="Password"
-                  placeholderTextColor="#8A8A8A"
-                  style={[getInputStyle(passwordFocused), styles.inputWithIcon]}
-                  secureTextEntry={!showPassword}
-                  onChangeText={setPassword}
-                  value={password}
-                  editable={!loading}
-                  onFocus={() => setPasswordFocused(true)}
-                  onBlur={() => setPasswordFocused(false)}
-                  returnKeyType="done"
-                  onSubmitEditing={handleLogin}
-                />
-
-                <TouchableOpacity
-                  onPress={() => setShowPassword((prev) => !prev)}
-                  style={styles.iconButton}
-                  disabled={loading}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name={showPassword ? "eye-off" : "eye"}
-                    size={20}
-                    color="#111"
-                  />
-                </TouchableOpacity>
-              </View>
 
               {errorMsg ? <Text style={styles.errorText}>{errorMsg}</Text> : null}
 
               <TouchableOpacity
                 style={[styles.button, loading && styles.buttonDisabled]}
-                onPress={handleLogin}
+                onPress={handleReset}
                 disabled={loading}
                 activeOpacity={0.85}
               >
                 {loading ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.buttonText}>Login</Text>
+                  <Text style={styles.buttonText}>Send Reset Link</Text>
                 )}
               </TouchableOpacity>
 
-              <Text
-                style={[styles.link, loading && styles.disabledText]}
-                onPress={() => !loading && router.push("/signup")}
-              >
-                Don’t have an account? Sign up
-              </Text>
-
-              <Text
-                style={[styles.forgotLink, loading && styles.disabledText]}
-                onPress={() => !loading && router.push("/(auth)/forgot-password")}
-              >
-                Forgot password?
+              <Text style={styles.hint}>
+                We’ll email you a link. If you don’t see it, check spam/junk.
               </Text>
             </Animated.View>
           </ScrollView>
@@ -262,10 +207,6 @@ const styles = StyleSheet.create({
     color: "#000",
     marginBottom: 6,
   },
-  inputWrapper: {
-    position: "relative",
-    marginBottom: 14,
-  },
   input: {
     borderWidth: 1,
     borderColor: "#E5E5E5",
@@ -273,13 +214,9 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     paddingHorizontal: 14,
     borderRadius: 14,
+    marginBottom: 14,
     color: "#000",
     fontSize: 16,
-    marginBottom: 14,
-  },
-  inputWithIcon: {
-    paddingRight: 46,
-    marginBottom: 0,
   },
   inputFocused: {
     borderColor: "#000",
@@ -287,15 +224,6 @@ const styles = StyleSheet.create({
   },
   inputError: {
     borderColor: "#D90429",
-  },
-  iconButton: {
-    position: "absolute",
-    right: 14,
-    top: 0,
-    bottom: 0,
-    justifyContent: "center",
-    alignItems: "center",
-    width: 34,
   },
   errorText: {
     color: "#D90429",
@@ -312,17 +240,11 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.7 },
   buttonText: { color: "#fff", fontWeight: "900", fontSize: 16 },
-  link: {
-    marginTop: 16,
+  hint: {
+    marginTop: 12,
     textAlign: "center",
-    color: "#007AFF",
-    fontWeight: "800",
+    color: "#666",
+    fontSize: 13,
+    lineHeight: 18,
   },
-  forgotLink: {
-    marginTop: 10,
-    textAlign: "center",
-    color: "#000",
-    fontWeight: "800",
-  },
-  disabledText: { opacity: 0.5 },
 });

@@ -1,9 +1,11 @@
 import { useRouter } from "expo-router";
-import { createUserWithEmailAndPassword } from "firebase/auth";
-import { useState } from "react";
+import { createUserWithEmailAndPassword, updateProfile } from "firebase/auth";
+import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  SafeAreaView,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -15,185 +17,282 @@ import { auth } from "../../firebase/config";
 export default function Signup() {
   const router = useRouter();
 
+  // Form fields
+  const [firstName, setFirstName] = useState("");
+  const [surname, setSurname] = useState("");
   const [email, setEmail] = useState("");
+
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+
+  // UI state
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [errorText, setErrorText] = useState<string | null>(null);
+
+  // Validation helpers
+  const minPasswordLen = 8;
+
+  const canSubmit = useMemo(() => {
+    return (
+      firstName.trim().length > 0 &&
+      surname.trim().length > 0 &&
+      email.trim().length > 0 &&
+      password.length >= minPasswordLen &&
+      confirmPassword.length >= minPasswordLen &&
+      password === confirmPassword &&
+      !loading
+    );
+  }, [firstName, surname, email, password, confirmPassword, loading]);
 
   const handleSignup = async () => {
-    setErrorText(null);
+    if (loading) return;
 
-    if (!email || !password || !confirmPassword) {
-      setErrorText("Please fill in all fields.");
+    const f = firstName.trim();
+    const s = surname.trim();
+    const e = email.trim();
+
+    if (!f || !s) {
+      alert("Please enter your first name and surname.");
       return;
     }
 
-    if (password.length < 6) {
-      setErrorText("Password must be at least 6 characters.");
+    if (!e) {
+      alert("Please enter your email.");
+      return;
+    }
+
+    if (password.length < minPasswordLen) {
+      alert(`Password must be at least ${minPasswordLen} characters.`);
       return;
     }
 
     if (password !== confirmPassword) {
-      setErrorText("Passwords do not match.");
+      alert("Passwords do not match.");
       return;
     }
 
+    setLoading(true);
+
     try {
-      setLoading(true);
-      await createUserWithEmailAndPassword(auth, email.trim(), password);
+      // 1) Create the user
+      const cred = await createUserWithEmailAndPassword(auth, e, password);
+
+      // 2) Save name on the Firebase Auth user profile
+      await updateProfile(cred.user, {
+        displayName: `${f} ${s}`,
+      });
+
+      // 3) Go into the app
       router.replace("/(tabs)");
-    } catch {
-      setErrorText("Unable to create account. Try again.");
+    } catch (error: any) {
+      alert(error?.message ?? "Signup failed. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
-        <View style={styles.card}>
+    <KeyboardAvoidingView
+      style={styles.flex}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.container}>
           <Text style={styles.title}>Create Account</Text>
-          <Text style={styles.subtitle}>
-            Sign up to book meetings on MeetPastor.
-          </Text>
+          <Text style={styles.subtitle}>Sign up to book meetings on MeetPastor.</Text>
 
-          <TextInput
-            placeholder="Email"
-            placeholderTextColor="#000"
-            style={styles.input}
-            value={email}
-            onChangeText={setEmail}
-            autoCapitalize="none"
-            keyboardType="email-address"
-          />
+          <View style={styles.card}>
+            {/* First Name */}
+            <Text style={styles.label}>First Name</Text>
+            <TextInput
+              placeholder="Jonathan"
+              placeholderTextColor="#9AA0A6"
+              style={styles.input}
+              value={firstName}
+              onChangeText={setFirstName}
+              autoCapitalize="words"
+              editable={!loading}
+            />
 
-          <TextInput
-            placeholder="Password"
-            placeholderTextColor="#000"
-            style={styles.input}
-            value={password}
-            secureTextEntry={!showPassword}
-            onChangeText={setPassword}
-          />
+            {/* Surname */}
+            <Text style={styles.label}>Surname</Text>
+            <TextInput
+              placeholder="Smith"
+              placeholderTextColor="#9AA0A6"
+              style={styles.input}
+              value={surname}
+              onChangeText={setSurname}
+              autoCapitalize="words"
+              editable={!loading}
+            />
 
-          <TextInput
-            placeholder="Confirm password"
-            placeholderTextColor="#000"
-            style={styles.input}
-            value={confirmPassword}
-            secureTextEntry={!showPassword}
-            onChangeText={setConfirmPassword}
-          />
+            {/* Email */}
+            <Text style={styles.label}>Email</Text>
+            <TextInput
+              placeholder="jono.3k@gmail.com"
+              placeholderTextColor="#9AA0A6"
+              style={styles.input}
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              editable={!loading}
+            />
 
-          <TouchableOpacity
-            style={styles.toggle}
-            onPress={() => setShowPassword((v) => !v)}
-          >
-            <Text style={styles.toggleText}>
-              {showPassword ? "Hide password" : "Show password"}
-            </Text>
-          </TouchableOpacity>
+            {/* Password */}
+            <Text style={styles.label}>Password</Text>
+            <TextInput
+              placeholder={`Min ${minPasswordLen} characters`}
+              placeholderTextColor="#9AA0A6"
+              style={styles.input}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+              editable={!loading}
+            />
 
-          {errorText ? <Text style={styles.error}>{errorText}</Text> : null}
+            {/* Confirm Password */}
+            <Text style={styles.label}>Confirm password</Text>
+            <TextInput
+              placeholder="Re-enter password"
+              placeholderTextColor="#9AA0A6"
+              style={styles.input}
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+              editable={!loading}
+            />
 
-          <TouchableOpacity
-            style={[styles.button, loading && styles.buttonDisabled]}
-            onPress={handleSignup}
-            disabled={loading}
-          >
-            {loading ? (
-              <View style={styles.loadingRow}>
+            {/* Show password */}
+            <TouchableOpacity
+              onPress={() => setShowPassword((prev) => !prev)}
+              disabled={loading}
+              style={styles.showRow}
+            >
+              <Text style={styles.showText}>
+                {showPassword ? "Hide password" : "Show password"}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Submit */}
+            <TouchableOpacity
+              style={[styles.button, !canSubmit ? styles.buttonDisabled : null]}
+              onPress={handleSignup}
+              disabled={!canSubmit}
+              activeOpacity={0.9}
+            >
+              {loading ? (
                 <ActivityIndicator />
-                <Text style={styles.buttonText}> Creating…</Text>
-              </View>
-            ) : (
-              <Text style={styles.buttonText}>Sign Up</Text>
-            )}
-          </TouchableOpacity>
+              ) : (
+                <Text style={styles.buttonText}>Sign Up</Text>
+              )}
+            </TouchableOpacity>
 
-          <Text style={styles.link} onPress={() => router.push("/login")}>
-            Already have an account? Login
-          </Text>
+            {/* Login link */}
+            <Text style={styles.link} onPress={() => router.push("/login")}>
+              Already have an account? Login
+            </Text>
+          </View>
         </View>
-      </View>
-    </SafeAreaView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: "#fff",
-  },
-  container: {
-    flex: 1,
-    padding: 24,
+  flex: { flex: 1, backgroundColor: "#fff" },
+
+  scrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    paddingBottom: 24,
     justifyContent: "center",
-    backgroundColor: "#fff",
   },
-  card: {
+
+  container: {
     width: "100%",
-    maxWidth: 420,
-    alignSelf: "center",
   },
+
   title: {
-    fontSize: 24,
-    fontWeight: "bold",
-    textAlign: "center",
+    fontSize: 34,
+    fontWeight: "900",
+    color: "#111",
     marginBottom: 8,
-    color: "#000",
   },
+
   subtitle: {
-    fontSize: 14,
+    fontSize: 16,
     color: "#555",
-    textAlign: "center",
-    marginBottom: 20,
+    marginBottom: 18,
+    lineHeight: 22,
   },
+
+  card: {
+    backgroundColor: "#F7F7F8",
+    borderRadius: 20,
+    padding: 18,
+  },
+
+  label: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#111",
+    marginBottom: 8,
+    marginTop: 10,
+  },
+
   input: {
+    backgroundColor: "#fff",
     borderWidth: 1,
-    borderColor: "#ccc",
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 12,
-    color: "#000",
+    borderColor: "#E5E5EA",
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    fontSize: 16,
+    color: "#111",
   },
-  toggle: {
+
+  showRow: {
     alignSelf: "flex-end",
-    marginBottom: 10,
+    marginTop: 10,
+    marginBottom: 14,
   },
-  toggleText: {
+
+  showText: {
     color: "#007AFF",
+    fontSize: 16,
     fontWeight: "600",
   },
-  error: {
-    color: "#D32F2F",
-    textAlign: "center",
-    marginBottom: 12,
-  },
+
   button: {
     backgroundColor: "#000",
-    padding: 14,
-    borderRadius: 10,
+    paddingVertical: 16,
+    borderRadius: 16,
     alignItems: "center",
+    marginTop: 6,
   },
+
   buttonDisabled: {
-    opacity: 0.7,
+    opacity: 0.35,
   },
-  loadingRow: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
+
   buttonText: {
     color: "#fff",
-    fontWeight: "bold",
-    fontSize: 16,
+    fontWeight: "800",
+    fontSize: 18,
   },
+
   link: {
-    marginTop: 16,
+    marginTop: 18,
     textAlign: "center",
     color: "#007AFF",
+    fontSize: 17,
+    fontWeight: "600",
   },
 });
