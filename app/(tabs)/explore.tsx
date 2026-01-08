@@ -1,397 +1,782 @@
-import * as Calendar from 'expo-calendar';
-import { useState } from 'react';
+import React, { useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  SafeAreaView,
+  ScrollView,
   StyleSheet,
+  Text,
   TextInput,
-} from 'react-native';
+  View,
+} from "react-native";
 
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { BookingRequest, useBookings } from '../context/BookingContext';
+import {
+  addDoc,
+  collection,
+  doc,
+  getDoc,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  Timestamp,
+  updateDoc,
+  where,
+} from "firebase/firestore";
 
+import { db } from "../../firebase/config";
 
-const ACCESS_CODE = 'KAC2025'; // change this to whatever you want
+// ✅ IMPORTANT: Replace with Pastor account UID (Firebase Auth UID)
+const PASTOR_UID = "PASTOR_UID";
+
+// ✅ Pastor access code (temporary gate)
+const ACCESS_CODE = "KAC2025";
+
+// ✅ Avoid string literals inside JSX (prevents text-watcher false warnings)
+const SEG = {
+  REQUESTS: "requests",
+  SLOTS: "slots",
+  HISTORY: "history",
+} as const;
+
+type SegmentKey = (typeof SEG)[keyof typeof SEG];
+
+type BookingDoc = {
+  id: string;
+  userId?: string;
+  hostId?: string;
+  slotId?: string;
+  status?: "pending" | "approved" | "denied" | "cancelled" | string;
+
+  firstName?: string;
+  surname?: string;
+  fullName?: string;
+  email?: string;
+  contact?: string;
+
+  reason?: string;
+  note?: string;
+  location?: string;
+
+  startAt?: any;
+  endAt?: any;
+  createdAt?: any;
+};
+
+type SlotDoc = {
+  id: string;
+  hostId?: string;
+  status?: "open" | "pending" | "approved" | "closed" | string;
+  location?: string;
+  startAt?: any;
+  endAt?: any;
+  createdAt?: any;
+};
+
+type LocationKey = "office" | "unit11" | "unit12" | "main";
+
+const SEGMENTS: Array<{ key: SegmentKey; label: string }> = [
+  { key: SEG.REQUESTS, label: "Requests" },
+  { key: SEG.SLOTS, label: "Slots" },
+  { key: SEG.HISTORY, label: "History" },
+];
+
+const LOCATIONS: Array<{ key: LocationKey; label: string }> = [
+  { key: "office", label: "Pastor’s Office" },
+  { key: "unit11", label: "Unit 11" },
+  { key: "unit12", label: "Unit 12" },
+  { key: "main", label: "Main Church" },
+];
+
+function safeToDate(ts: any): Date | null {
+  if (!ts) return null;
+  if (ts?.toDate) return ts.toDate();
+  return null;
+}
+
+function formatShort(ts: any) {
+  const d = safeToDate(ts);
+  if (!d) return "—";
+  const day = d.toLocaleDateString(undefined, {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
+  const time = d.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `${day} • ${time}`;
+}
+
+function parseDateTime(input: string): Date | null {
+  // Accept: "2026-01-06 14:30" OR "2026-01-06T14:30"
+  const cleaned = input.trim().replace(" ", "T");
+  const d = new Date(cleaned);
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
+}
 
 export default function PastorScreen() {
-  const { bookings, approveBooking, denyBooking, proposeNewTime } = useBookings();
-
-  const [accessCode, setAccessCode] = useState('');
+  // Access
+  const [accessCode, setAccessCode] = useState("");
   const [isAuthed, setIsAuthed] = useState(false);
 
-  const [calendarId, setCalendarId] = useState<string | null>(null);
-  const [events, setEvents] = useState<Calendar.Event[]>([]);
-  const [hasCalendarPermission, setHasCalendarPermission] = useState<boolean | null>(null);
-  const [isLoadingCalendar, setIsLoadingCalendar] = useState(false);
+  // Segments
+  const [segment, setSegment] = useState<SegmentKey>(SEG.REQUESTS);
 
-  // Ask for calendar access and load events
-  const requestCalendarAccess = async () => {
+  // Data state
+  const [loadingRequests, setLoadingRequests] = useState(true);
+  const [loadingSlots, setLoadingSlots] = useState(true);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+
+  const [requests, setRequests] = useState<BookingDoc[]>([]);
+  const [slots, setSlots] = useState<SlotDoc[]>([]);
+  const [history, setHistory] = useState<BookingDoc[]>([]);
+
+  // Create slot form
+  const [startInput, setStartInput] = useState("");
+  const [endInput, setEndInput] = useState("");
+  const [slotLocationKey, setSlotLocationKey] = useState<LocationKey>("office");
+  const [creatingSlot, setCreatingSlot] = useState(false);
+
+  // Approve/Deny working state
+  const [workingId, setWorkingId] = useState<string | null>(null);
+
+  const slotLocationLabel =
+    LOCATIONS.find((l) => l.key === slotLocationKey)?.label ?? "Pastor’s Office";
+
+  // Queries
+  const requestsQuery = useMemo(() => {
+    return query(
+      collection(db, "bookings"),
+      where("hostId", "==", PASTOR_UID),
+      where("status", "==", "pending"),
+      orderBy("createdAt", "desc")
+    );
+  }, []);
+
+  const slotsQuery = useMemo(() => {
+    return query(
+      collection(db, "slots"),
+      where("hostId", "==", PASTOR_UID),
+      orderBy("startAt", "asc")
+    );
+  }, []);
+
+  const historyQuery = useMemo(() => {
+    return query(
+      collection(db, "bookings"),
+      where("hostId", "==", PASTOR_UID),
+      where("status", "in", ["approved", "denied", "cancelled"]),
+      orderBy("createdAt", "desc")
+    );
+  }, []);
+
+  // Load Requests
+  useEffect(() => {
+    if (!isAuthed) return;
+
+    setLoadingRequests(true);
+    const unsub = onSnapshot(
+      requestsQuery,
+      (snap) => {
+        const items: BookingDoc[] = snap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as any),
+        }));
+        setRequests(items);
+        setLoadingRequests(false);
+      },
+      (err) => {
+        console.error(err);
+        setRequests([]);
+        setLoadingRequests(false);
+      }
+    );
+
+    return () => unsub();
+  }, [isAuthed, requestsQuery]);
+
+  // Load Slots
+  useEffect(() => {
+    if (!isAuthed) return;
+
+    setLoadingSlots(true);
+    const unsub = onSnapshot(
+      slotsQuery,
+      (snap) => {
+        const items: SlotDoc[] = snap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as any),
+        }));
+        setSlots(items);
+        setLoadingSlots(false);
+      },
+      (err) => {
+        console.error(err);
+        setSlots([]);
+        setLoadingSlots(false);
+      }
+    );
+
+    return () => unsub();
+  }, [isAuthed, slotsQuery]);
+
+  // Load History
+  useEffect(() => {
+    if (!isAuthed) return;
+
+    setLoadingHistory(true);
+    const unsub = onSnapshot(
+      historyQuery,
+      (snap) => {
+        const items: BookingDoc[] = snap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as any),
+        }));
+        setHistory(items);
+        setLoadingHistory(false);
+      },
+      (err) => {
+        console.error(err);
+        setHistory([]);
+        setLoadingHistory(false);
+      }
+    );
+
+    return () => unsub();
+  }, [isAuthed, historyQuery]);
+
+  const handlePastorLogin = () => {
+    if (accessCode.trim() === ACCESS_CODE) {
+      setIsAuthed(true);
+      setAccessCode("");
+      setSegment(SEG.REQUESTS);
+      return;
+    }
+    Alert.alert("Incorrect code", "Please try again.");
+  };
+
+  const bookingDisplayName = (b: BookingDoc) => {
+    const full = (b.fullName || "").trim();
+    if (full) return full;
+
+    const first = (b.firstName || "").trim();
+    const sur = (b.surname || "").trim();
+    const combined = `${first} ${sur}`.trim();
+    if (combined) return combined;
+
+    return "Member";
+  };
+
+  const approveBooking = async (booking: BookingDoc) => {
     try {
-      const { status } = await Calendar.requestCalendarPermissionsAsync();
-      if (status !== 'granted') {
-        setHasCalendarPermission(false);
-        Alert.alert(
-          'Calendar access needed',
-          'To sync meetings with your iPhone calendar, please allow calendar access in Settings.'
-        );
-        return;
+      setWorkingId(booking.id);
+
+      await updateDoc(doc(db, "bookings", booking.id), {
+        status: "approved",
+        approvedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      const slotId = booking.slotId;
+      if (slotId) {
+        const slotRef = doc(db, "slots", slotId);
+        const slotSnap = await getDoc(slotRef);
+        if (slotSnap.exists()) {
+          await updateDoc(slotRef, {
+            status: "approved",
+            updatedAt: serverTimestamp(),
+          });
+        }
       }
 
-      setHasCalendarPermission(true);
-
-      // Get the default calendar (usually the one that syncs with iCloud / Google)
-      const defaultCalendar = await Calendar.getDefaultCalendarAsync();
-      setCalendarId(defaultCalendar.id);
-
-      await loadUpcomingEvents(defaultCalendar.id);
-    } catch (e) {
+      Alert.alert("Approved ✅", "Booking approved.");
+    } catch (e: any) {
       console.error(e);
-      Alert.alert('Error', 'Something went wrong while accessing the calendar.');
-    }
-  };
-
-  const loadUpcomingEvents = async (id: string) => {
-    setIsLoadingCalendar(true);
-    try {
-      const start = new Date();
-      const end = new Date();
-      end.setDate(start.getDate() + 7); // next 7 days
-
-      const evts = await Calendar.getEventsAsync([id], start, end);
-      setEvents(evts);
-    } catch (e) {
-      console.error(e);
+      Alert.alert("Error", e?.message ?? "Could not approve booking.");
     } finally {
-      setIsLoadingCalendar(false);
+      setWorkingId(null);
     }
   };
 
-  const handleLogin = async () => {
-    if (accessCode === ACCESS_CODE) {
-      setIsAuthed(true);
-      setAccessCode('');
-      await requestCalendarAccess();
-    } else {
-      Alert.alert('Incorrect code', 'Please try again.');
+  const denyBooking = async (booking: BookingDoc) => {
+    try {
+      setWorkingId(booking.id);
+
+      await updateDoc(doc(db, "bookings", booking.id), {
+        status: "denied",
+        deniedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      const slotId = booking.slotId;
+      if (slotId) {
+        const slotRef = doc(db, "slots", slotId);
+        const slotSnap = await getDoc(slotRef);
+        if (slotSnap.exists()) {
+          await updateDoc(slotRef, {
+            status: "open",
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+
+      Alert.alert("Denied ❌", "Booking denied.");
+    } catch (e: any) {
+      console.error(e);
+      Alert.alert("Error", e?.message ?? "Could not deny booking.");
+    } finally {
+      setWorkingId(null);
     }
   };
 
-  const handleApprove = async (booking: BookingRequest) => {
-    approveBooking(booking.id);
+  const createSlot = async () => {
+    const startDate = parseDateTime(startInput);
+    const endDate = parseDateTime(endInput);
 
-    if (!calendarId) {
-      // Calendar not ready, just mark approved
-      Alert.alert(
-        'Approved',
-        'The request is approved. Calendar sync is not available yet (no calendar ID).'
-      );
+    if (!startDate || !endDate) {
+      Alert.alert("Invalid date/time", "Use format: 2026-01-06 14:00");
+      return;
+    }
+    if (endDate <= startDate) {
+      Alert.alert("Invalid time range", "End must be after start.");
       return;
     }
 
     try {
-      // For now, we create an event starting "now" for 1 hour.
-      // Later we can add a UI to pick the exact date & time.
-      const startDate = new Date();
-      const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+      setCreatingSlot(true);
 
-      await Calendar.createEventAsync(calendarId, {
-        title: `Meeting with ${booking.fullName}`,
-        startDate,
-        endDate,
-        notes: `${booking.reason}\nContact: ${booking.contact}`,
-        location: 'KAC',
-        timeZone: undefined, // let the system decide
+      await addDoc(collection(db, "slots"), {
+        hostId: PASTOR_UID,
+        status: "open",
+        location: slotLocationLabel,
+        startAt: Timestamp.fromDate(startDate),
+        endAt: Timestamp.fromDate(endDate),
+        createdAt: serverTimestamp(),
       });
 
-      await loadUpcomingEvents(calendarId);
+      setStartInput("");
+      setEndInput("");
 
-      Alert.alert(
-        'Event added',
-        'The meeting has been added to your calendar. You can adjust the exact time in the Calendar app if needed.'
-      );
-    } catch (e) {
+      Alert.alert("Slot created ✅", "Your slot is now available for booking.");
+    } catch (e: any) {
       console.error(e);
-      Alert.alert(
-        'Calendar error',
-        'The request was approved, but we could not add it to the calendar.'
-      );
+      Alert.alert("Error", e?.message ?? "Could not create slot.");
+    } finally {
+      setCreatingSlot(false);
     }
   };
 
-  const handleDeny = (booking: BookingRequest) => {
-    denyBooking(booking.id);
-  };
+  const SegmentedTabs = () => (
+    <View style={styles.segmentWrap}>
+      {SEGMENTS.map((s) => {
+        const active = segment === s.key;
+        return (
+          <Pressable
+            key={s.key}
+            style={[styles.segmentBtn, active && styles.segmentBtnActive]}
+            onPress={() => setSegment(s.key)}
+          >
+            <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+              {s.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
 
-  const handleProposeTime = (booking: BookingRequest) => {
-    // For now, we just mark it as "proposed" with a generic note.
-    // Later, we can add a proper UI for selecting a specific time.
-    proposeNewTime(
-      booking.id,
-      'Please contact the office to agree a new time.'
-    );
-    Alert.alert(
-      'Time proposed',
-      'Marked as proposed. You can follow up with the member to agree on a specific time.'
-    );
-  };
+  const RequestsView = () => (
+    <View style={{ marginTop: 14 }}>
+      <Text style={styles.sectionTitle}>Pending requests</Text>
+      <Text style={styles.sectionSubtitle}>Approve or deny new booking requests.</Text>
 
-  const renderBooking = ({ item }: { item: BookingRequest }) => {
+      {loadingRequests ? (
+        <View style={styles.centerRow}>
+          <ActivityIndicator />
+          <Text style={styles.helperText}>Loading requests…</Text>
+        </View>
+      ) : requests.length === 0 ? (
+        <Text style={styles.emptyText}>No pending requests right now.</Text>
+      ) : (
+        <View style={{ gap: 12 }}>
+          {requests.map((b) => (
+            <View key={b.id} style={styles.card}>
+              <Text style={styles.cardTitle}>{bookingDisplayName(b)}</Text>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>Email</Text>
+                <Text style={styles.kValue}>{(b.email || "").trim() || "—"}</Text>
+              </View>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>Contact</Text>
+                <Text style={styles.kValue}>{(b.contact || "").trim() || "—"}</Text>
+              </View>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>When</Text>
+                <Text style={styles.kValue}>
+                  {formatShort(b.startAt)} → {formatShort(b.endAt)}
+                </Text>
+              </View>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>Reason</Text>
+                <Text style={styles.kValue}>{(b.reason || "").trim() || "—"}</Text>
+              </View>
+
+              {b.note ? (
+                <View style={styles.noteBox}>
+                  <Text style={styles.noteTitle}>Note</Text>
+                  <Text style={styles.noteText}>{b.note}</Text>
+                </View>
+              ) : null}
+
+              <View style={styles.actionRow}>
+                <Pressable
+                  style={[
+                    styles.actionBtn,
+                    styles.approveBtn,
+                    workingId === b.id && styles.btnDisabled,
+                  ]}
+                  onPress={() => approveBooking(b)}
+                  disabled={workingId === b.id}
+                >
+                  {workingId === b.id ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.actionText}>Approve</Text>
+                  )}
+                </Pressable>
+
+                <Pressable
+                  style={[
+                    styles.actionBtn,
+                    styles.denyBtn,
+                    workingId === b.id && styles.btnDisabled,
+                  ]}
+                  onPress={() => denyBooking(b)}
+                  disabled={workingId === b.id}
+                >
+                  <Text style={styles.actionTextDark}>Deny</Text>
+                </Pressable>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+
+  const SlotsView = () => (
+    <View style={{ marginTop: 14 }}>
+      <Text style={styles.sectionTitle}>Availability slots</Text>
+      <Text style={styles.sectionSubtitle}>Create and review your available times.</Text>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Create a new slot</Text>
+
+        <Text style={styles.fieldLabel}>Start (YYYY-MM-DD 14:00)</Text>
+        <TextInput
+          value={startInput}
+          onChangeText={setStartInput}
+          placeholder="2026-01-06 14:00"
+          placeholderTextColor="#999"
+          style={styles.input}
+        />
+
+        <Text style={styles.fieldLabel}>End (YYYY-MM-DD 15:00)</Text>
+        <TextInput
+          value={endInput}
+          onChangeText={setEndInput}
+          placeholder="2026-01-06 15:00"
+          placeholderTextColor="#999"
+          style={styles.input}
+        />
+
+        <Text style={styles.fieldLabel}>Location</Text>
+
+        <View style={styles.pillsRow}>
+          {LOCATIONS.map((loc) => {
+            const active = slotLocationKey === loc.key;
+            return (
+              <Pressable
+                key={loc.key}
+                style={[styles.pill, active && styles.pillActive]}
+                onPress={() => setSlotLocationKey(loc.key)}
+              >
+                <Text style={[styles.pillText, active && styles.pillTextActive]}>
+                  {loc.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <Pressable
+          style={[styles.primaryBtn, creatingSlot && styles.btnDisabled]}
+          onPress={createSlot}
+          disabled={creatingSlot}
+        >
+          {creatingSlot ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.primaryBtnText}>Create Slot</Text>
+          )}
+        </Pressable>
+      </View>
+
+      {loadingSlots ? (
+        <View style={styles.centerRow}>
+          <ActivityIndicator />
+          <Text style={styles.helperText}>Loading slots…</Text>
+        </View>
+      ) : slots.length === 0 ? (
+        <Text style={styles.emptyText}>No slots yet. Create one above.</Text>
+      ) : (
+        <View style={{ gap: 12 }}>
+          {slots.map((s) => (
+            <View key={s.id} style={styles.card}>
+              <Text style={styles.cardTitle}>Slot</Text>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>Start</Text>
+                <Text style={styles.kValue}>{formatShort(s.startAt)}</Text>
+              </View>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>End</Text>
+                <Text style={styles.kValue}>{formatShort(s.endAt)}</Text>
+              </View>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>Location</Text>
+                <Text style={styles.kValue}>{(s.location || "").trim() || "—"}</Text>
+              </View>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>Status</Text>
+                <Text style={styles.kValue}>{(s.status || "open").toString()}</Text>
+              </View>
+
+              <Text style={styles.mutedSmall}>ID: {s.id}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+
+  const HistoryView = () => (
+    <View style={{ marginTop: 14 }}>
+      <Text style={styles.sectionTitle}>Past decisions</Text>
+      <Text style={styles.sectionSubtitle}>Approved/denied bookings appear here.</Text>
+
+      {loadingHistory ? (
+        <View style={styles.centerRow}>
+          <ActivityIndicator />
+          <Text style={styles.helperText}>Loading history…</Text>
+        </View>
+      ) : history.length === 0 ? (
+        <Text style={styles.emptyText}>No history yet.</Text>
+      ) : (
+        <View style={{ gap: 12 }}>
+          {history.map((b) => (
+            <View key={b.id} style={styles.card}>
+              <Text style={styles.cardTitle}>{bookingDisplayName(b)}</Text>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>Status</Text>
+                <Text style={styles.kValue}>{(b.status || "—").toString()}</Text>
+              </View>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>When</Text>
+                <Text style={styles.kValue}>
+                  {formatShort(b.startAt)} → {formatShort(b.endAt)}
+                </Text>
+              </View>
+
+              <View style={styles.kvRow}>
+                <Text style={styles.kLabel}>Reason</Text>
+                <Text style={styles.kValue}>{(b.reason || "").trim() || "—"}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+
+  if (!isAuthed) {
     return (
-      <ThemedView style={styles.card}>
-        <ThemedText type="defaultSemiBold" style={styles.name}>
-          {item.fullName}
-        </ThemedText>
-        <ThemedText style={styles.field}>Contact: {item.contact}</ThemedText>
-        <ThemedText style={styles.field}>Reason: {item.reason}</ThemedText>
-        <ThemedText style={styles.field}>Preferred: {item.preferredTime}</ThemedText>
-        {item.proposedTime && (
-          <ThemedText style={styles.field}>Proposed: {item.proposedTime}</ThemedText>
-        )}
-        <ThemedText style={styles.status}>
-          Status:{' '}
-          <ThemedText type="defaultSemiBold" style={statusColor(item.status)}>
-            {item.status.toUpperCase()}
-          </ThemedText>
-        </ThemedText>
+      <SafeAreaView style={styles.safe}>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <ScrollView contentContainerStyle={styles.authWrap} keyboardShouldPersistTaps="handled">
+            <Text style={styles.bigTitle}>Pastor Dashboard</Text>
+            <Text style={styles.bigSubtitle}>Enter access code to manage slots and requests.</Text>
 
-        <ThemedView style={styles.buttonRow}>
-          <Pressable
-            style={[styles.smallButton, styles.approveButton]}
-            onPress={() => void handleApprove(item)}
-          >
-            <ThemedText style={styles.buttonText}>Approve + Calendar</ThemedText>
-          </Pressable>
-          <Pressable
-            style={[styles.smallButton, styles.denyButton]}
-            onPress={() => handleDeny(item)}
-          >
-            <ThemedText style={styles.buttonText}>Deny</ThemedText>
-          </Pressable>
-          <Pressable
-            style={[styles.smallButton, styles.proposeButton]}
-            onPress={() => handleProposeTime(item)}
-          >
-            <ThemedText style={styles.buttonText}>Propose Time</ThemedText>
-          </Pressable>
-        </ThemedView>
-      </ThemedView>
+            <Text style={styles.fieldLabel}>Access code</Text>
+            <TextInput
+              value={accessCode}
+              onChangeText={setAccessCode}
+              placeholder="Enter code"
+              placeholderTextColor="#999"
+              style={styles.input}
+              secureTextEntry
+            />
+
+            <Pressable style={styles.primaryBtn} onPress={handlePastorLogin}>
+              <Text style={styles.primaryBtnText}>Login</Text>
+            </Pressable>
+
+            <Text style={styles.mutedSmall}>
+              For testing: <Text style={{ fontWeight: "900" }}>{ACCESS_CODE}</Text>
+            </Text>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
     );
-  };
-
-  const renderEvent = ({ item }: { item: Calendar.Event }) => {
-    const start = item.startDate ? new Date(item.startDate) : null;
-    const end = item.endDate ? new Date(item.endDate) : null;
-
-    return (
-      <ThemedView style={styles.eventCard}>
-        <ThemedText type="defaultSemiBold">
-          {item.title || '(No title)'}
-        </ThemedText>
-        {start && (
-          <ThemedText style={styles.eventTime}>
-            {start.toLocaleString()}
-            {end ? `  →  ${end.toLocaleTimeString()}` : ''}
-          </ThemedText>
-        )}
-        {item.location && (
-          <ThemedText style={styles.eventLocation}>{item.location}</ThemedText>
-        )}
-      </ThemedView>
-    );
-  };
+  }
 
   return (
-    <KeyboardAvoidingView
-    style={{ flex: 1 }}
-    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    keyboardVerticalOffset={80}
-  >
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#D0D0D0', dark: '#353636' }}
-      headerImage={null as any}
-    >
-      {!isAuthed ? (
-        <>
-          <ThemedText type="title" style={styles.title}>
-            Welcome, Pastor Randolph
-          </ThemedText>
-          <ThemedText style={styles.subtitle}>
-            Enter the access code to view meeting requests and sync with your calendar.
-          </ThemedText>
+    <SafeAreaView style={styles.safe}>
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        <Text style={styles.bigTitle}>Welcome, Pastor Randolph</Text>
+        <Text style={styles.bigSubtitle}>Manage requests, slots and history.</Text>
 
-          <ThemedText style={styles.label}>Access code</ThemedText>
-          <TextInput
-            style={styles.input}
-            value={accessCode}
-            onChangeText={setAccessCode}
-            placeholder="Enter code"
-            placeholderTextColor="#6b7280"
-            secureTextEntry
-          />
+        <SegmentedTabs />
 
-          <Pressable style={styles.button} onPress={() => void handleLogin()}>
-            <ThemedText style={styles.buttonText}>Login</ThemedText>
-          </Pressable>
+        {/* ✅ No string literals inside JSX now */}
+        {segment === SEG.REQUESTS ? <RequestsView /> : null}
+        {segment === SEG.SLOTS ? <SlotsView /> : null}
+        {segment === SEG.HISTORY ? <HistoryView /> : null}
 
-          <ThemedText style={{ marginTop: 16, color: '#9ca3af', fontSize: 12 }}>
-            (For testing, the code is currently: <ThemedText type="defaultSemiBold">{ACCESS_CODE}</ThemedText>)
-          </ThemedText>
-        </>
-      ) : (
-        <>
-          {/* Calendar section */}
-          <ThemedText type="title" style={styles.title}>
-            Calendar
-          </ThemedText>
-          <ThemedText style={styles.subtitle}>
-            Showing events from your default calendar for the next 7 days.
-          </ThemedText>
-
-          {hasCalendarPermission === false && (
-            <ThemedText style={{ color: '#ef4444', marginBottom: 8 }}>
-              Calendar permission not granted. Please enable it in Settings.
-            </ThemedText>
-          )}
-
-          {hasCalendarPermission && !isLoadingCalendar && events.length === 0 && (
-            <ThemedText style={{ color: '#9ca3af', marginBottom: 8 }}>
-              No events in the next 7 days.
-            </ThemedText>
-          )}
-
-            {hasCalendarPermission && events.length > 0 && (
-              <ThemedView style={{ gap: 8, marginBottom: 16 }}>
-                {events.map((event) => (
-                  <ThemedView key={event.id}>{renderEvent({ item: event })}</ThemedView>
-                ))}
-              </ThemedView>
-            )}
-
-
-          {/* Requests section */}
-          <ThemedText type="title" style={[styles.title, { marginTop: 16 }]}>
-            Requests
-          </ThemedText>
-          <ThemedText style={styles.subtitle}>
-            Review new meeting requests from members.
-          </ThemedText>
-
-            {bookings.length === 0 ? (
-              <ThemedText style={{ marginTop: 16, color: '#9ca3af' }}>
-                No booking requests yet.
-              </ThemedText>
-            ) : (
-              <ThemedView style={{ marginTop: 8, gap: 12 }}>
-                {[...bookings].reverse().map((booking) => (
-                  <ThemedView key={booking.id}>{renderBooking({ item: booking })}</ThemedView>
-                ))}
-              </ThemedView>
-            )}
-
-        </>
-      )}
-    </ParallaxScrollView>
-    </KeyboardAvoidingView>
+        <View style={{ height: 30 }} />
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
-function statusColor(status: BookingRequest['status']) {
-  switch (status) {
-    case 'approved':
-      return { color: '#22c55e' };
-    case 'denied':
-      return { color: '#ef4444' };
-    case 'proposed':
-      return { color: '#eab308' };
-    default:
-      return { color: '#38bdf8' };
-  }
-}
-
 const styles = StyleSheet.create({
-  title: {
-    marginBottom: 4,
+  safe: { flex: 1, backgroundColor: "#fff" },
+
+  authWrap: {
+    flexGrow: 1,
+    padding: 20,
+    paddingTop: 40,
+    justifyContent: "center",
   },
-  subtitle: {
-    marginBottom: 12,
-    color: '#9ca3af',
-  },
-  label: {
-    marginBottom: 4,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#374151',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: Platform.OS === 'ios' ? 12 : 8,
-    color: '#f9fafb',
+
+  container: { padding: 20, paddingTop: 26 },
+
+  bigTitle: { fontSize: 28, fontWeight: "900", color: "#111", marginBottom: 6 },
+  bigSubtitle: {
     fontSize: 14,
-    marginBottom: 12,
+    color: "#666",
+    lineHeight: 20,
+    marginBottom: 16,
   },
-  button: {
-    marginTop: 4,
-    paddingVertical: 12,
-    borderRadius: 10,
-    alignItems: 'center',
-    backgroundColor: '#0a7ea4',
-  },
-  buttonText: {
-    color: '#f9fafb',
-    fontWeight: '600',
-  },
-  card: {
-    borderWidth: 1,
-    borderColor: '#374151',
-    borderRadius: 10,
-    padding: 12,
-  },
-  name: {
-    marginBottom: 4,
-  },
-  field: {
-    fontSize: 14,
-    marginBottom: 2,
-  },
-  status: {
-    marginTop: 6,
-  },
-  buttonRow: {
-    flexDirection: 'row',
-    marginTop: 10,
+
+  segmentWrap: {
+    flexDirection: "row",
+    backgroundColor: "#F2F2F2",
+    borderRadius: 14,
+    padding: 6,
     gap: 6,
   },
-  smallButton: {
+  segmentBtn: {
     flex: 1,
-    paddingVertical: 8,
-    borderRadius: 8,
-    alignItems: 'center',
+    paddingVertical: 10,
+    borderRadius: 12,
+    alignItems: "center",
   },
-  approveButton: {
-    backgroundColor: '#16a34a',
+  segmentBtnActive: { backgroundColor: "#111" },
+  segmentText: { fontSize: 13, fontWeight: "900", color: "#111" },
+  segmentTextActive: { color: "#fff" },
+
+  sectionTitle: { fontSize: 18, fontWeight: "900", marginBottom: 6, color: "#111" },
+  sectionSubtitle: { fontSize: 13, color: "#666", lineHeight: 18, marginBottom: 12 },
+
+  card: { backgroundColor: "#F4F4F4", borderRadius: 14, padding: 14 },
+  cardTitle: { fontSize: 16, fontWeight: "900", color: "#111", marginBottom: 10 },
+
+  kvRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 8,
   },
-  denyButton: {
-    backgroundColor: '#b91c1c',
-  },
-  proposeButton: {
-    backgroundColor: '#6366f1',
-  },
-  eventCard: {
+  kLabel: { fontSize: 13, color: "#666", fontWeight: "800", width: 70 },
+  kValue: { flex: 1, textAlign: "right", fontSize: 13, color: "#111", fontWeight: "800" },
+
+  noteBox: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 12,
     borderWidth: 1,
-    borderColor: '#4b5563',
-    borderRadius: 10,
-    padding: 10,
+    borderColor: "#E5E5E5",
+    marginTop: 6,
   },
-  eventTime: {
-    fontSize: 13,
-    color: '#e5e7eb',
+  noteTitle: { fontSize: 12, fontWeight: "900", color: "#111", marginBottom: 4 },
+  noteText: { fontSize: 13, color: "#333", lineHeight: 18 },
+
+  actionRow: { flexDirection: "row", gap: 10, marginTop: 10 },
+  actionBtn: { flex: 1, paddingVertical: 12, borderRadius: 12, alignItems: "center" },
+  approveBtn: { backgroundColor: "#111" },
+  denyBtn: { backgroundColor: "#fff", borderWidth: 1, borderColor: "#111" },
+  actionText: { color: "#fff", fontSize: 14, fontWeight: "900" },
+  actionTextDark: { color: "#111", fontSize: 14, fontWeight: "900" },
+
+  input: {
+    borderWidth: 1,
+    borderColor: "#DDD",
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 16,
+    color: "#111",
+    backgroundColor: "#fff",
+    marginBottom: 10,
   },
-  eventLocation: {
-    fontSize: 13,
-    color: '#9ca3af',
+  fieldLabel: { fontSize: 13, fontWeight: "800", color: "#111", marginBottom: 6 },
+
+  primaryBtn: {
+    backgroundColor: "#111",
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: "center",
+    marginTop: 6,
   },
+  primaryBtnText: { color: "#fff", fontSize: 15, fontWeight: "900" },
+
+  pillsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 8 },
+  pill: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#DDD",
+  },
+  pillActive: { backgroundColor: "#111", borderColor: "#111" },
+  pillText: { fontSize: 12, fontWeight: "900", color: "#111" },
+  pillTextActive: { color: "#fff" },
+
+  centerRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 12 },
+  helperText: { fontSize: 13, color: "#666", fontWeight: "700" },
+
+  emptyText: { fontSize: 13, color: "#666", lineHeight: 18, marginTop: 8, fontWeight: "700" },
+
+  mutedSmall: { marginTop: 10, fontSize: 12, color: "#777", lineHeight: 16 },
+
+  btnDisabled: { opacity: 0.6 },
 });
