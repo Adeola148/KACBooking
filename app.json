@@ -44,7 +44,8 @@
         {
           "calendarPermission": "MeetPastor needs access to your calendar so we can add approved meetings."
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true,
@@ -52,4 +53,3 @@
     }
   }
 }
-
